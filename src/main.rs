@@ -11,7 +11,9 @@
 //! The trait uses async/await for all operations since blockchain RPCs are typically network
 //! calls. The mock implementation provides a basic example of how these could be implemented.
 //!
-use std::collections::HashMap;
+use crate::error::Result;
+use std::{collections::HashMap, path::Path};
+mod error;
 
 type BlockHash = String;
 type Address = String;
@@ -53,7 +55,7 @@ struct Log {
 }
 
 #[async_trait::async_trait]
-trait BlockchainRpc {
+trait Blockchain {
     // Block related
     async fn get_block_by_hash(&self, hash: BlockHash) -> Option<Block>;
     async fn get_block_by_number(&self, number: u64) -> Option<Block>;
@@ -78,14 +80,33 @@ trait BlockchainRpc {
     async fn gas_price(&self) -> u64;
 }
 
-struct BlockHeadRpc {
+struct Blockhead {
+    connection: sqlite::ConnectionThreadSafe,
+
     blocks: HashMap<BlockHash, Block>,
     transactions: HashMap<TransactionHash, Transaction>,
     balances: HashMap<Address, u64>,
 }
 
+impl Blockhead {
+    fn new<T: AsRef<Path>>(db_filename: T) -> Result<Self> {
+        let connection = sqlite::Connection::open_thread_safe(db_filename)?;
+
+        let query = "
+            CREATE TABLE blocks (id UUID, parent_id, payload INTEGER);
+        ";
+        assert!(connection.execute(query).is_ok());
+        Ok(Self {
+            connection,
+            blocks: Default::default(),
+            transactions: Default::default(),
+            balances: Default::default(),
+        })
+    }
+}
+
 #[async_trait::async_trait]
-impl BlockchainRpc for BlockHeadRpc {
+impl Blockchain for Blockhead {
     async fn get_block_by_hash(&self, hash: BlockHash) -> Option<Block> {
         self.blocks.get(&hash).cloned()
     }
@@ -148,14 +169,22 @@ impl BlockchainRpc for BlockHeadRpc {
 }
 
 #[tokio::main]
-async fn main() {
-    let client = BlockHeadRpc {
-        blocks: HashMap::new(),
-        transactions: HashMap::new(),
-        balances: HashMap::new(),
-    };
-
+async fn main() -> Result<()> {
+    let client = Blockhead::new(":memory:")?;
     let balance = client.get_balance("0x123...".to_string()).await;
     let gas_price = client.gas_price().await;
     println!("Balance: {}, Gas Price: {}", balance, gas_price);
+    Ok(())
+}
+
+#[test]
+fn test_sqlite_mem() {
+    let connection = sqlite::open(":memory:").unwrap();
+
+    let query = "
+        CREATE TABLE users (name TEXT, age INTEGER);
+        INSERT INTO users VALUES ('Alice', 42);
+        INSERT INTO users VALUES ('Bob', 69);
+    ";
+    assert!(connection.execute(query).is_ok());
 }
