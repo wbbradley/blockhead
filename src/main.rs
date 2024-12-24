@@ -12,31 +12,18 @@
 //! calls. The mock implementation provides a basic example of how these could be implemented.
 //!
 use crate::error::Result;
+use crate::address::Address;
+use crate::block::{Block, BlockHash};
+use crate::transaction::Transaction;
 use std::{collections::HashMap, path::Path};
+
+mod address;
+mod block;
 mod error;
+mod transaction;
 
-type BlockHash = String;
-type Address = String;
-type TransactionHash = String;
-
-#[derive(Debug, Clone)]
-struct Block {
-    hash: BlockHash,
-    parent_hash: BlockHash,
-    number: u64,
-    timestamp: u64,
-    transactions: Vec<Transaction>,
-}
-
-#[derive(Debug, Clone)]
-struct Transaction {
-    hash: TransactionHash,
-    from: Address,
-    to: Address,
-    value: u64,
-    data: Vec<u8>,
-    nonce: u64,
-}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct TransactionHash([u8; 32]);
 
 #[derive(Debug)]
 struct TransactionReceipt {
@@ -57,7 +44,7 @@ struct Log {
 #[async_trait::async_trait]
 trait Blockchain {
     // Block related
-    async fn get_block_by_hash(&self, hash: BlockHash) -> Option<Block>;
+    async fn get_block_by_hash(&self, hash: BlockHash) -> Result<Option<Block>>;
     async fn get_block_by_number(&self, number: u64) -> Option<Block>;
     async fn get_latest_block(&self) -> Block;
 
@@ -93,9 +80,23 @@ impl Blockhead {
         let connection = sqlite::Connection::open_thread_safe(db_filename)?;
 
         let query = "
-            CREATE TABLE blocks (id UUID, parent_id, payload INTEGER);
+            CREATE TABLE block (
+                hash TEXT,
+                parent_hash TEXT,
+                number INTEGER,
+                timestamp_nanos INTEGER
+            );
+            CREATE TABLE transactions (
+                hash TEXT,
+                block_hash TEXT,
+                from_address TEXT,
+                to_address TEXT,
+                value INTEGER,
+                data BLOB,
+                nonce INTEGER
+            );
         ";
-        assert!(connection.execute(query).is_ok());
+        connection.execute(query)?;
         Ok(Self {
             connection,
             blocks: Default::default(),
@@ -107,8 +108,21 @@ impl Blockhead {
 
 #[async_trait::async_trait]
 impl Blockchain for Blockhead {
-    async fn get_block_by_hash(&self, hash: BlockHash) -> Option<Block> {
-        self.blocks.get(&hash).cloned()
+    async fn get_block_by_hash(&self, hash: BlockHash) -> Result<Option<Block>> {
+        let query = "SELECT * FROM block WHERE hash = ? LIMIT 1";
+let hash_string :String= hash.to_string();
+        for row in self
+            .connection
+            .prepare(query)?
+            .into_iter()
+            .bind((1, hash_string))
+            .unwrap()
+        {
+            let row = row?;
+            println!("name = {}", row.read::<&str, _>("name"));
+            println!("age = {}", row.read::<i64, _>("age"));
+        }
+        Ok(self.blocks.get(&hash).cloned())
     }
 
     async fn get_block_by_number(&self, number: u64) -> Option<Block> {
@@ -175,6 +189,32 @@ async fn main() -> Result<()> {
     let gas_price = client.gas_price().await;
     println!("Balance: {}, Gas Price: {}", balance, gas_price);
     Ok(())
+}
+
+#[tokio::test]
+async fn test_get_none_block_by_hash() {
+    let blockhead = Blockhead::new(":memory:").unwrap();
+    let block_result = blockhead.get_block_by_hash("abcdef".into()).await;
+    assert!(block_result.is_ok());
+    assert!(block_result.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn test_get_inserted_block_by_hash() {
+    let blockhead = Blockhead::new(":memory:").unwrap();
+    let latest_block = blockhead.get_latest_block().await;
+    let transaction = Transaction {
+    hash: transaction.compute_hash(latest_block.hash),
+    from_address: "abcdef",
+    to_address:   "g12345",
+    value: u64,
+    data: Vec<u8>,
+    nonce: u64,
+    };
+    let block_hash = blockhead.send_transaction( transaction);
+    let block_result = blockhead.get_block_by_hash("abcdef".into()).await;
+    assert!(block_result.is_ok());
+    assert!(block_result.unwrap().is_none());
 }
 
 #[test]
