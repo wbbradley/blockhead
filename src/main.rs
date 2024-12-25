@@ -11,24 +11,23 @@
 //! The trait uses async/await for all operations since blockchain RPCs are typically network
 //! calls. The mock implementation provides a basic example of how these could be implemented.
 //!
-use crate::error::Result;
 use crate::address::Address;
-use crate::block::{Block, BlockHash};
+use crate::block::Block;
+use crate::error::Result;
+use crate::hash::Hash;
 use crate::transaction::Transaction;
 use std::{collections::HashMap, path::Path};
 
 mod address;
 mod block;
 mod error;
+mod hash;
 mod transaction;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct TransactionHash([u8; 32]);
 
 #[derive(Debug)]
 struct TransactionReceipt {
-    transaction_hash: TransactionHash,
-    block_hash: BlockHash,
+    transaction_hash: Hash,
+    block_hash: Hash,
     status: bool,
     gas_used: u64,
     logs: Vec<Log>,
@@ -44,14 +43,14 @@ struct Log {
 #[async_trait::async_trait]
 trait Blockchain {
     // Block related
-    async fn get_block_by_hash(&self, hash: BlockHash) -> Result<Option<Block>>;
+    async fn get_block_by_hash(&self, hash: Hash) -> Result<Option<Block>>;
     async fn get_block_by_number(&self, number: u64) -> Option<Block>;
     async fn get_latest_block(&self) -> Block;
 
     // Transaction related
-    async fn get_transaction(&self, hash: TransactionHash) -> Option<Transaction>;
-    async fn get_transaction_receipt(&self, hash: TransactionHash) -> Option<TransactionReceipt>;
-    async fn send_transaction(&self, transaction: Transaction) -> TransactionHash;
+    async fn get_transaction(&self, hash: Hash) -> Option<Transaction>;
+    async fn get_transaction_receipt(&self, hash: Hash) -> Option<TransactionReceipt>;
+    async fn send_transaction(&self, transaction: Transaction) -> Hash;
 
     // Account related
     async fn get_balance(&self, address: Address) -> u64;
@@ -70,8 +69,8 @@ trait Blockchain {
 struct Blockhead {
     connection: sqlite::ConnectionThreadSafe,
 
-    blocks: HashMap<BlockHash, Block>,
-    transactions: HashMap<TransactionHash, Transaction>,
+    blocks: HashMap<Hash, Block>,
+    transactions: HashMap<Hash, Transaction>,
     balances: HashMap<Address, u64>,
 }
 
@@ -108,14 +107,14 @@ impl Blockhead {
 
 #[async_trait::async_trait]
 impl Blockchain for Blockhead {
-    async fn get_block_by_hash(&self, hash: BlockHash) -> Result<Option<Block>> {
+    async fn get_block_by_hash(&self, hash: Hash) -> Result<Option<Block>> {
         let query = "SELECT * FROM block WHERE hash = ? LIMIT 1";
-let hash_string :String= hash.to_string();
+        let hash_string: String = hash.to_string();
         for row in self
             .connection
             .prepare(query)?
             .into_iter()
-            .bind((1, hash_string))
+            .bind((1, hash_string.as_str()))
             .unwrap()
         {
             let row = row?;
@@ -140,17 +139,17 @@ let hash_string :String= hash.to_string();
             .unwrap()
     }
 
-    async fn get_transaction(&self, hash: TransactionHash) -> Option<Transaction> {
+    async fn get_transaction(&self, hash: Hash) -> Option<Transaction> {
         self.transactions.get(&hash).cloned()
     }
 
-    async fn get_transaction_receipt(&self, _hash: TransactionHash) -> Option<TransactionReceipt> {
+    async fn get_transaction_receipt(&self, _hash: Hash) -> Option<TransactionReceipt> {
         // Implementation omitted for brevity
         None
     }
 
-    async fn send_transaction(&self, _transaction: Transaction) -> TransactionHash {
-        "mock_tx_hash".to_string()
+    async fn send_transaction(&self, _transaction: Transaction) -> Hash {
+        Hash([0u8; 32])
     }
 
     async fn get_balance(&self, address: Address) -> u64 {
@@ -185,7 +184,7 @@ let hash_string :String= hash.to_string();
 #[tokio::main]
 async fn main() -> Result<()> {
     let client = Blockhead::new(":memory:")?;
-    let balance = client.get_balance("0x123...".to_string()).await;
+    let balance = client.get_balance(Address([0u8; 32])).await;
     let gas_price = client.gas_price().await;
     println!("Balance: {}, Gas Price: {}", balance, gas_price);
     Ok(())
@@ -203,16 +202,15 @@ async fn test_get_none_block_by_hash() {
 async fn test_get_inserted_block_by_hash() {
     let blockhead = Blockhead::new(":memory:").unwrap();
     let latest_block = blockhead.get_latest_block().await;
+
     let transaction = Transaction {
-    hash: transaction.compute_hash(latest_block.hash),
-    from_address: "abcdef",
-    to_address:   "g12345",
-    value: u64,
-    data: Vec<u8>,
-    nonce: u64,
+        from_address: Address([0; 32]),
+        to_address: Address([1; 32]),
+        value: 100,
+        data: vec![1, 2, 3],
     };
-    let block_hash = blockhead.send_transaction( transaction);
-    let block_result = blockhead.get_block_by_hash("abcdef".into()).await;
+    let block_hash = blockhead.send_transaction(transaction).await;
+    let block_result = blockhead.get_block_by_hash(block_hash).await;
     assert!(block_result.is_ok());
     assert!(block_result.unwrap().is_none());
 }
